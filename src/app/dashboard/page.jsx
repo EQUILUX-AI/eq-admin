@@ -1,14 +1,20 @@
 'use client';
 
-import { Alert, Card, Empty, Input, Space, Typography } from 'antd';
+import { Alert, Card, Empty, Input, Segmented, Space, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import DeviceStatesByType from '@/components/DeviceStatesByType';
 import EnergyTimeseriesChart from '@/components/EnergyTimeseriesChart';
-import LatestStatesTable from '@/components/LatestStatesTable';
 import WeeklySummaryCards from '@/components/WeeklySummaryCards';
 
 const { Title, Text } = Typography;
+
+const PERIOD_OPTIONS = [
+  { label: 'Week', value: 'week' },
+  { label: 'Month', value: 'month' },
+];
+const PERIOD_DAYS = { week: 7, month: 30 };
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -24,17 +30,20 @@ export default function DashboardPage() {
     process.env.NEXT_PUBLIC_DEFAULT_HOME_ID || '',
   );
 
+  const [summaryPeriod, setSummaryPeriod] = useState('week');
+  const [seriesPeriod, setSeriesPeriod] = useState('week');
+
   const enabled = Boolean(homeId);
   const base = `/api/hub/stats/${encodeURIComponent(homeId)}`;
 
   const summary = useQuery({
-    queryKey: ['weekly-summary', homeId],
-    queryFn: () => fetchJson(`${base}/weekly-summary`),
+    queryKey: ['weekly-summary', homeId, summaryPeriod],
+    queryFn: () => fetchJson(`${base}/weekly-summary?period=${summaryPeriod}`),
     enabled,
   });
   const series = useQuery({
-    queryKey: ['energy-timeseries', homeId],
-    queryFn: () => fetchJson(`${base}/energy-timeseries`),
+    queryKey: ['energy-timeseries', homeId, seriesPeriod],
+    queryFn: () => fetchJson(`${base}/energy-timeseries?period=${seriesPeriod}`),
     enabled,
   });
   const states = useQuery({
@@ -83,14 +92,41 @@ export default function DashboardPage() {
 
       {enabled && (
         <>
-          <WeeklySummaryCards summary={summary.data} loading={summary.isLoading} />
+          <div>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 12,
+              }}
+            >
+              <Text strong>Summary</Text>
+              <Segmented
+                options={PERIOD_OPTIONS}
+                value={summaryPeriod}
+                onChange={setSummaryPeriod}
+              />
+            </div>
+            <WeeklySummaryCards summary={summary.data} loading={summary.isLoading} />
+          </div>
 
-          <Card title="Daily energy (last 7 days)" loading={series.isLoading}>
+          <Card
+            title={`Daily energy (last ${PERIOD_DAYS[seriesPeriod]} days)`}
+            loading={series.isLoading}
+            extra={
+              <Segmented
+                options={PERIOD_OPTIONS}
+                value={seriesPeriod}
+                onChange={setSeriesPeriod}
+              />
+            }
+          >
             <EnergyTimeseriesChart data={series.data} />
           </Card>
 
           <Card title="Current device states">
-            <LatestStatesTable rows={states.data} loading={states.isLoading} />
+            <DeviceStatesByType rows={states.data} loading={states.isLoading} />
           </Card>
         </>
       )}
