@@ -4,7 +4,17 @@ import { Table, Tag } from 'antd';
 
 const columns = [
   { title: 'Source', dataIndex: 'source', key: 'source', render: (s) => <Tag>{s}</Tag> },
-  { title: 'Entity', dataIndex: 'source_entity_id', key: 'entity', ellipsis: true },
+  {
+    title: 'Device',
+    dataIndex: 'source_entity_id',
+    key: 'entity',
+    ellipsis: true,
+    // Prefer eq-hub's friendly name (with model) over the raw external id.
+    render: (id, row) => {
+      const name = row.device_name || id;
+      return row.device_model ? `${name} · ${row.device_model}` : name;
+    },
+  },
   { title: 'Metric', dataIndex: 'metric', key: 'metric' },
   {
     title: 'Direction',
