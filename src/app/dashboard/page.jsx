@@ -2,7 +2,7 @@
 
 import { Alert, Card, DatePicker, Empty, Input, Segmented, Space, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 
 import DeviceStatesByType from '@/components/DeviceStatesByType';
@@ -17,6 +17,9 @@ const PERIOD_OPTIONS = [
   { label: 'Month', value: 'month' },
   { label: 'Custom', value: 'custom' },
 ];
+
+// Where the home id + period selections are remembered across refreshes.
+const PREFS_KEY = 'eq.dashboard';
 
 /** Resolve a period selection to the stats API's window contract: an inclusive
  *  `start` and an exclusive `end`, both as ISO (YYYY-MM-DD) strings.
@@ -40,6 +43,11 @@ function resolveWindow(period, range) {
 }
 
 const windowDays = (win) => dayjs(win.end).diff(dayjs(win.start), 'day');
+
+// A dayjs range round-trips through localStorage as a pair of ISO date strings.
+const serializeRange = (r) => [r[0].format('YYYY-MM-DD'), r[1].format('YYYY-MM-DD')];
+const parseRange = (a) =>
+  Array.isArray(a) && a.length === 2 ? [dayjs(a[0]), dayjs(a[1])] : null;
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -68,35 +76,63 @@ function PeriodControls({ period, onPeriod, range, onRange }) {
 }
 
 export default function DashboardPage() {
-  const [homeId, setHomeId] = useState(
-    process.env.NEXT_PUBLIC_DEFAULT_HOME_ID || '',
-  );
-
   const defaultRange = () => [dayjs().startOf('month'), dayjs()];
-  const [summaryPeriod, setSummaryPeriod] = useState('week');
-  const [summaryRange, setSummaryRange] = useState(defaultRange);
-  const [seriesPeriod, setSeriesPeriod] = useState('week');
-  const [seriesRange, setSeriesRange] = useState(defaultRange);
+
+  const [homeId, setHomeId] = useState('');
+  // One global window drives the summary + daily-energy chart.
+  const [period, setPeriod] = useState('week');
+  const [range, setRange] = useState(defaultRange);
+  // Device history charts keep their own window (shorter, higher-cadence data).
   const [devicePeriod, setDevicePeriod] = useState('week');
   const [deviceRange, setDeviceRange] = useState(defaultRange);
 
-  const summaryWin = resolveWindow(summaryPeriod, summaryRange);
-  const seriesWin = resolveWindow(seriesPeriod, seriesRange);
+  // Hydrate saved preferences once on mount — kept out of the initial render so
+  // server and client agree — then persist on every change.
+  const hydrated = useRef(false);
+  useEffect(() => {
+    let prefs = {};
+    try {
+      prefs = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    } catch {
+      prefs = {};
+    }
+    setHomeId(prefs.homeId || process.env.NEXT_PUBLIC_DEFAULT_HOME_ID || '');
+    if (prefs.period) setPeriod(prefs.period);
+    if (parseRange(prefs.range)) setRange(parseRange(prefs.range));
+    if (prefs.devicePeriod) setDevicePeriod(prefs.devicePeriod);
+    if (parseRange(prefs.deviceRange)) setDeviceRange(parseRange(prefs.deviceRange));
+    hydrated.current = true;
+  }, []);
+  useEffect(() => {
+    if (!hydrated.current) return;
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify({
+        homeId,
+        period,
+        range: serializeRange(range),
+        devicePeriod,
+        deviceRange: serializeRange(deviceRange),
+      }),
+    );
+  }, [homeId, period, range, devicePeriod, deviceRange]);
+
+  const globalWin = resolveWindow(period, range);
   const deviceWin = resolveWindow(devicePeriod, deviceRange);
 
   const enabled = Boolean(homeId);
   const base = `/api/hub/stats/${encodeURIComponent(homeId)}`;
 
   const summary = useQuery({
-    queryKey: ['weekly-summary', homeId, summaryWin.start, summaryWin.end],
+    queryKey: ['weekly-summary', homeId, globalWin.start, globalWin.end],
     queryFn: () =>
-      fetchJson(`${base}/weekly-summary?start=${summaryWin.start}&end=${summaryWin.end}`),
+      fetchJson(`${base}/weekly-summary?start=${globalWin.start}&end=${globalWin.end}`),
     enabled,
   });
   const series = useQuery({
-    queryKey: ['energy-timeseries', homeId, seriesWin.start, seriesWin.end],
+    queryKey: ['energy-timeseries', homeId, globalWin.start, globalWin.end],
     queryFn: () =>
-      fetchJson(`${base}/energy-timeseries?start=${seriesWin.start}&end=${seriesWin.end}`),
+      fetchJson(`${base}/energy-timeseries?start=${globalWin.start}&end=${globalWin.end}`),
     enabled,
   });
   const states = useQuery({
@@ -116,17 +152,39 @@ export default function DashboardPage() {
         <Text type="secondary">Live energy metrics for a selected home.</Text>
       </div>
 
-      <Space direction="vertical" size={4}>
-        <Text strong>Home ID</Text>
-        <Input.Search
-          placeholder="Enter a home_id (e.g. home-123)"
-          defaultValue={homeId}
-          allowClear
-          enterButton="Load"
-          style={{ maxWidth: 420 }}
-          onSearch={(v) => setHomeId(v.trim())}
-        />
-      </Space>
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+        }}
+      >
+        <Space direction="vertical" size={4}>
+          <Text strong>Home ID</Text>
+          <Input.Search
+            key={homeId}
+            placeholder="Enter a home_id (e.g. home-123)"
+            defaultValue={homeId}
+            allowClear
+            enterButton="Load"
+            style={{ maxWidth: 420, width: '60vw' }}
+            onSearch={(v) => setHomeId(v.trim())}
+          />
+        </Space>
+        {enabled && (
+          <Space direction="vertical" size={4} style={{ alignItems: 'flex-end' }}>
+            <Text strong>Period</Text>
+            <PeriodControls
+              period={period}
+              onPeriod={setPeriod}
+              range={range}
+              onRange={setRange}
+            />
+          </Space>
+        )}
+      </div>
 
       {!enabled && (
         <Card>
@@ -146,38 +204,15 @@ export default function DashboardPage() {
       {enabled && (
         <>
           <div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 12,
-                gap: 12,
-                flexWrap: 'wrap',
-              }}
-            >
-              <Text strong>Summary</Text>
-              <PeriodControls
-                period={summaryPeriod}
-                onPeriod={setSummaryPeriod}
-                range={summaryRange}
-                onRange={setSummaryRange}
-              />
-            </div>
+            <Text strong style={{ display: 'block', marginBottom: 12 }}>
+              Summary
+            </Text>
             <WeeklySummaryCards summary={summary.data} loading={summary.isLoading} />
           </div>
 
           <Card
-            title={`Daily energy (${windowDays(seriesWin)} days)`}
+            title={`Daily energy (${windowDays(globalWin)} days)`}
             loading={series.isLoading}
-            extra={
-              <PeriodControls
-                period={seriesPeriod}
-                onPeriod={setSeriesPeriod}
-                range={seriesRange}
-                onRange={setSeriesRange}
-              />
-            }
           >
             <EnergyTimeseriesChart data={series.data} />
           </Card>
