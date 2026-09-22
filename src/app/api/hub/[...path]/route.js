@@ -1,7 +1,13 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
-import { ACCESS_COOKIE } from '@/lib/auth';
+import {
+  ACCESS_COOKIE,
+  REFRESH_COOKIE,
+  clearAuthCookies,
+  refreshAccessToken,
+  setAuthCookies,
+} from '@/lib/auth';
 
 /**
  * Server-side proxy to eq-hub's `/api/*` surface.
@@ -18,7 +24,8 @@ import { ACCESS_COOKIE } from '@/lib/auth';
 export async function GET(request, { params }) {
   const store = await cookies();
   const access = store.get(ACCESS_COOKIE)?.value;
-  if (!access) {
+  const refresh = store.get(REFRESH_COOKIE)?.value;
+  if (!access && !refresh) {
     return NextResponse.json({ error: 'notAuthenticated' }, { status: 401 });
   }
 
@@ -32,17 +39,42 @@ export async function GET(request, { params }) {
   // eq-hub is DRF with APPEND_SLASH — end the path in a slash so the GET isn't
   // 301-redirected (a redirect would drop the Authorization header).
   const target = `${base.replace(/\/$/, '')}/api/${path.join('/')}/${search}`;
-
-  try {
-    const res = await fetch(target, {
-      headers: { Authorization: `Bearer ${access}`, Accept: 'application/json' },
+  const callHub = (token) =>
+    fetch(target, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       cache: 'no-store',
     });
+
+  try {
+    // Try the current access token; on a 401 (expired/revoked), transparently
+    // exchange the refresh token for a new one and retry once. `rotated` carries
+    // the fresh tokens so we can persist them onto the response.
+    let res = access ? await callHub(access) : null;
+    let rotated = null;
+    if ((!res || res.status === 401) && refresh) {
+      rotated = await refreshAccessToken(refresh);
+      if (rotated?.access) {
+        res = await callHub(rotated.access);
+      }
+    }
+
+    // No usable session (no access and refresh failed, or refresh still 401s):
+    // clear cookies so the client bounces the operator to /login.
+    if (!res || res.status === 401) {
+      const out = NextResponse.json({ error: 'sessionExpired' }, { status: 401 });
+      clearAuthCookies(out);
+      return out;
+    }
+
     const body = await res.text();
-    return new NextResponse(body, {
+    const out = new NextResponse(body, {
       status: res.status,
       headers: { 'Content-Type': res.headers.get('Content-Type') ?? 'application/json' },
     });
+    if (rotated?.access) {
+      setAuthCookies(out, { access: rotated.access, refresh: rotated.refresh });
+    }
+    return out;
   } catch (error) {
     return NextResponse.json(
       { error: 'eqHubUnreachable', detail: String(error?.message ?? error) },
