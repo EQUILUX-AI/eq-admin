@@ -21,6 +21,26 @@ import {
  *
  * `/api/hub/stats/<home>/weekly-summary?...` → `${EQ_HUB_URL}/api/stats/<home>/weekly-summary/?...`
  */
+
+/**
+ * Coalesce concurrent refreshes. The dashboard fires several queries at once, so
+ * on a stale access token they'd each try to redeem the same rotating, single-use
+ * refresh token — all but the first would get an invalidated token back and
+ * wrongly clear the session. Share one in-flight refresh per token within this
+ * server process (the proxy-side equivalent of tiggie's `isRefreshing` guard).
+ */
+const inflightRefreshes = new Map();
+function refreshOnce(refreshToken) {
+  let pending = inflightRefreshes.get(refreshToken);
+  if (!pending) {
+    pending = refreshAccessToken(refreshToken).finally(() =>
+      inflightRefreshes.delete(refreshToken),
+    );
+    inflightRefreshes.set(refreshToken, pending);
+  }
+  return pending;
+}
+
 export async function GET(request, { params }) {
   const store = await cookies();
   const access = store.get(ACCESS_COOKIE)?.value;
@@ -52,7 +72,7 @@ export async function GET(request, { params }) {
     let res = access ? await callHub(access) : null;
     let rotated = null;
     if ((!res || res.status === 401) && refresh) {
-      rotated = await refreshAccessToken(refresh);
+      rotated = await refreshOnce(refresh);
       if (rotated?.access) {
         res = await callHub(rotated.access);
       }
