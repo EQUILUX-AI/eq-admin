@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 
 import DeviceStatesByType from '@/components/DeviceStatesByType';
 import EnergyTimeseriesChart from '@/components/EnergyTimeseriesChart';
+import WeatherPanel from '@/components/WeatherPanel';
 import WeeklySummaryCards from '@/components/WeeklySummaryCards';
 
 const { Title, Text } = Typography;
@@ -140,6 +141,14 @@ export default function DashboardPage() {
     queryFn: () => fetchJson(`${base}/latest-states`),
     enabled,
   });
+  // Weather has a fixed horizon (past actuals + forward forecast), so it's not
+  // bound to the period window. Kept out of `anyError` — a home without lat/lon
+  // has no weather, which shouldn't red-alert the whole dashboard.
+  const weather = useQuery({
+    queryKey: ['weather', homeId],
+    queryFn: () => fetchJson(`${base}/weather`),
+    enabled,
+  });
 
   const anyError = summary.error || series.error || states.error;
 
@@ -234,6 +243,19 @@ export default function DashboardPage() {
               homeId={homeId}
               win={deviceWin}
             />
+          </Card>
+
+          <Card title="Weather — forecast vs actual" loading={weather.isLoading}>
+            {weather.error ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Could not load weather"
+                description={String(weather.error.message)}
+              />
+            ) : (
+              <WeatherPanel data={weather.data} />
+            )}
           </Card>
         </>
       )}
