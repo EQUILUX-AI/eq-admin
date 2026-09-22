@@ -15,6 +15,8 @@ import {
 } from 'recharts';
 import dayjs from 'dayjs';
 
+import { fetchJson } from '@/lib/api';
+
 const { Text } = Typography;
 
 const METRIC_UNITS = {
@@ -48,15 +50,6 @@ function useDark() {
     return () => mq.removeEventListener('change', on);
   }, []);
   return dark;
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || body?.error || `Request failed (${res.status})`);
-  }
-  return res.json();
 }
 
 /**
