@@ -58,7 +58,11 @@ export default function DashboardLayout({ children }) {
             size="small"
             icon={<LogoutOutlined />}
             onClick={logout}
-            ghost
+            style={{
+              color: '#fff',
+              background: 'transparent',
+              borderColor: 'rgba(255,255,255,0.45)',
+            }}
           >
             Sign out
           </Button>

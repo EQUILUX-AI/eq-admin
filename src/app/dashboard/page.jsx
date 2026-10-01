@@ -7,7 +7,9 @@ import dayjs from 'dayjs';
 
 import DeviceStatesByType from '@/components/DeviceStatesByType';
 import EnergyTimeseriesChart from '@/components/EnergyTimeseriesChart';
+import WeatherPanel from '@/components/WeatherPanel';
 import WeeklySummaryCards from '@/components/WeeklySummaryCards';
+import { fetchJson } from '@/lib/api';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -48,15 +50,6 @@ const windowDays = (win) => dayjs(win.end).diff(dayjs(win.start), 'day');
 const serializeRange = (r) => [r[0].format('YYYY-MM-DD'), r[1].format('YYYY-MM-DD')];
 const parseRange = (a) =>
   Array.isArray(a) && a.length === 2 ? [dayjs(a[0]), dayjs(a[1])] : null;
-
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || body?.error || `Request failed (${res.status})`);
-  }
-  return res.json();
-}
 
 /** Segmented Week/Month/Custom plus a range picker revealed only for Custom. */
 function PeriodControls({ period, onPeriod, range, onRange }) {
@@ -138,6 +131,14 @@ export default function DashboardPage() {
   const states = useQuery({
     queryKey: ['latest-states', homeId],
     queryFn: () => fetchJson(`${base}/latest-states`),
+    enabled,
+  });
+  // Weather has a fixed horizon (past actuals + forward forecast), so it's not
+  // bound to the period window. Kept out of `anyError` — a home without lat/lon
+  // has no weather, which shouldn't red-alert the whole dashboard.
+  const weather = useQuery({
+    queryKey: ['weather', homeId],
+    queryFn: () => fetchJson(`${base}/weather`),
     enabled,
   });
 
@@ -234,6 +235,19 @@ export default function DashboardPage() {
               homeId={homeId}
               win={deviceWin}
             />
+          </Card>
+
+          <Card title="Weather — forecast vs actual" loading={weather.isLoading}>
+            {weather.error ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Could not load weather"
+                description={String(weather.error.message)}
+              />
+            ) : (
+              <WeatherPanel data={weather.data} />
+            )}
           </Card>
         </>
       )}
