@@ -2,11 +2,17 @@
 
 import { LogoutOutlined, ThunderboltFilled } from '@ant-design/icons';
 import { Button, Layout, Space, Typography } from 'antd';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
+
+const NAV = [
+  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/dashboard/connections', label: 'Connections' },
+];
 
 function readUserCookie() {
   const match = document.cookie.split('; ').find((c) => c.startsWith('eq_user='));
@@ -20,6 +26,7 @@ function readUserCookie() {
 
 export default function DashboardLayout({ children }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [user, setUser] = useState(null);
 
   useEffect(() => {
@@ -47,6 +54,19 @@ export default function DashboardLayout({ children }) {
           <Text strong style={{ color: '#fff', fontSize: 16 }}>
             Equilux Admin
           </Text>
+          {NAV.map(({ href, label }) => (
+            <Link
+              key={href}
+              href={href}
+              style={{
+                color: pathname === href ? '#fff' : 'rgba(255,255,255,0.65)',
+                fontWeight: pathname === href ? 600 : 400,
+                marginLeft: 12,
+              }}
+            >
+              {label}
+            </Link>
+          ))}
         </Space>
         <Space size={16}>
           {user?.fullName || user?.username ? (
