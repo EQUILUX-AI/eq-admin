@@ -16,10 +16,12 @@ import {
   Tag,
   Typography,
 } from 'antd';
+import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 
+import { outdoorUnits } from '@/lib/aircon';
 import { fetchJson, mutateJson } from '@/lib/api';
 
 const { Title, Text } = Typography;
@@ -240,8 +242,68 @@ function AccountsSection({ accounts }) {
   );
 }
 
-/** Create/edit one home's connection: provider, account and (for an aggregated
- *  FusionSolar account) the station codes this home is scoped to. */
+/** Groups of the home's aircons that share one outdoor unit (condenser), saved
+ *  as the Daikin connection's `scope.outdoor_units`. Units left out each have
+ *  their own; shared units all report the condenser's total energy. */
+function OutdoorUnitsField({ homeId, open }) {
+  const states = useQuery({
+    queryKey: ['latest-states', homeId],
+    queryFn: () => fetchJson(`/api/hub/stats/${encodeURIComponent(homeId)}/latest-states`),
+    enabled: open && Boolean(homeId),
+  });
+  const options = [
+    ...new Map(
+      (states.data ?? [])
+        .filter((r) => r.source === 'daikin')
+        .map((r) => [r.source_entity_id, { value: r.source_entity_id, label: r.device_name || r.source_entity_id }]),
+    ).values(),
+  ].sort((a, b) => a.label.localeCompare(b.label));
+
+  return (
+    <Form.Item
+      label="Shared outdoor units"
+      extra="One row per condenser serving two or more aircons. Aircons not listed have their own."
+    >
+      <Form.List
+        name="outdoor_units"
+        rules={[
+          {
+            validator: async (_, groups) => {
+              const all = (groups ?? []).flat().filter(Boolean);
+              if (new Set(all).size !== all.length) throw new Error('An aircon can only be on one outdoor unit.');
+            },
+          },
+        ]}
+      >
+        {(fields, { add, remove }, { errors }) => (
+          <>
+            {fields.map((field) => (
+              <Space key={field.key} align="baseline" style={{ display: 'flex' }}>
+                <Form.Item
+                  {...field}
+                  rules={[{ required: true, type: 'array', min: 2, message: 'Pick at least two aircons.' }]}
+                  style={{ width: 360, marginBottom: 8 }}
+                >
+                  <Select mode="multiple" placeholder="Aircons on this condenser" options={options}
+                    loading={states.isLoading} optionFilterProp="label" />
+                </Form.Item>
+                <MinusCircleOutlined onClick={() => remove(field.name)} />
+              </Space>
+            ))}
+            <Button type="dashed" onClick={() => add([])} icon={<PlusOutlined />}>
+              Add shared outdoor unit
+            </Button>
+            <Form.ErrorList errors={errors} />
+          </>
+        )}
+      </Form.List>
+    </Form.Item>
+  );
+}
+
+/** Create/edit one home's connection: provider, account, (for an aggregated
+ *  FusionSolar account) the station codes this home is scoped to, and (for
+ *  Daikin) which aircons share an outdoor unit. */
 function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
@@ -260,8 +322,9 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
             account: connection.account,
             enabled: connection.enabled ?? true,
             station_codes: connection.scope?.station_codes ?? [],
+            outdoor_units: outdoorUnits([connection]),
           }
-        : { provider: 'fusionsolar', enabled: true, station_codes: [] },
+        : { provider: 'fusionsolar', enabled: true, station_codes: [], outdoor_units: [] },
     );
   }, [open, connection, form]);
 
@@ -291,6 +354,11 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     // Keep any other scope keys (e.g. charger_ids) the connection already has.
     const scope = { ...(connection?.scope ?? {}) };
     if (needsStations) scope.station_codes = values.station_codes ?? [];
+    if (values.provider === 'daikin') {
+      const groups = (values.outdoor_units ?? []).filter((g) => g?.length >= 2);
+      if (groups.length) scope.outdoor_units = groups;
+      else delete scope.outdoor_units;
+    }
     save.mutate({
       home: homeId,
       provider: values.provider,
@@ -356,6 +424,7 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
             </Form.Item>
           </>
         )}
+        {provider === 'daikin' && <OutdoorUnitsField homeId={homeId} open={open} />}
         <Form.Item name="enabled" label="Enabled" valuePropName="checked">
           <Switch />
         </Form.Item>
@@ -415,9 +484,15 @@ function ConnectionsSection({ accounts }) {
     },
     { title: 'Status', dataIndex: 'status', render: (s) => <Tag color={STATUS_COLORS[s]}>{s}</Tag> },
     {
-      title: 'Stations',
-      key: 'stations',
-      render: (_, c) => (c.scope?.station_codes ?? []).join(', ') || <Text type="secondary">—</Text>,
+      title: 'Scope',
+      key: 'scope',
+      render: (_, c) => {
+        if (c.provider === 'daikin') {
+          const n = outdoorUnits([c]).length;
+          return n ? `${n} shared outdoor unit${n > 1 ? 's' : ''}` : <Text type="secondary">no shared outdoor units</Text>;
+        }
+        return (c.scope?.station_codes ?? []).join(', ') || <Text type="secondary">—</Text>;
+      },
     },
     { title: 'Enabled', dataIndex: 'enabled', render: (v) => (v === false ? <Tag>Off</Tag> : <Tag color="green">On</Tag>) },
     {

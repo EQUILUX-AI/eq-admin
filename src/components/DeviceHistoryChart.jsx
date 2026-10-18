@@ -57,7 +57,7 @@ function useDark() {
  * direction (e.g. a utility meter's imported vs exported energy). Pulls raw rows
  * from eq-hub's `readings` surface for exactly this (source, entity, metric).
  */
-export default function DeviceHistoryChart({ homeId, source, entityId, metric, win, title }) {
+export default function DeviceHistoryChart({ homeId, source, entityId, metric, win, title, dots = false }) {
   const dark = useDark();
   const axis = dark ? '#c3c2b7' : '#52514e';
   const grid = dark ? '#2a2a28' : '#e5e5e2';
@@ -151,7 +151,7 @@ export default function DeviceHistoryChart({ homeId, source, entityId, metric, w
               name={dir === 'value' ? metric : dir}
               stroke={dark ? DIR_COLORS[dir]?.dark : DIR_COLORS[dir]?.light}
               strokeWidth={2}
-              dot={metric === 'session_kwh' ? { r: 3 } : false}
+              dot={dots || metric === 'session_kwh' ? { r: 4 } : false}
               connectNulls
               isAnimationActive={false}
             />
