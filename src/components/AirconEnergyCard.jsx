@@ -15,7 +15,7 @@ import {
 } from 'recharts';
 import dayjs from 'dayjs';
 
-import { airconSystems, systemWh } from '@/lib/aircon';
+import { airconSystems } from '@/lib/aircon';
 import { fetchJson } from '@/lib/api';
 
 const { Text } = Typography;
@@ -47,9 +47,9 @@ const kwh = (wh) => (wh == null ? null : wh / 1000);
 const fmt = (v) => `${Number(v).toFixed(1)} kWh`;
 
 /**
- * Daily aircon energy per condenser (outdoor unit) over the window, stacked.
- * Daikin rows are one per indoor unit per local day (stamped at local midnight);
- * indoor units sharing a condenser are folded into one system (see lib/aircon).
+ * Daily aircon energy per outdoor unit over the window, stacked, plus a per-room
+ * table. eq-hub's aircon-energy rows are one per indoor unit per local day, with
+ * a shared outdoor unit's total split across its rooms by runtime (`estimated`).
  * Today's bar is partial.
  */
 export default function AirconEnergyCard({ homeId, win, units, groups }) {
@@ -58,20 +58,13 @@ export default function AirconEnergyCard({ homeId, win, units, groups }) {
   const grid = dark ? '#2a2a28' : '#e5e5e2';
   const surface = dark ? '#1a1a19' : '#ffffff';
 
-  // Rows are stamped at local midnight, so send local-midnight instants (with
-  // offset) rather than bare dates, which eq-ai would read as UTC midnight.
-  const params = new URLSearchParams({
-    source: 'daikin',
-    metric: 'energy_wh',
-    direction: 'consumed',
-    start: dayjs(win.start).format(),
-    end: dayjs(win.end).format(),
-    limit: '5000',
-  });
+  // One row per indoor unit per local day; units sharing an outdoor unit carry
+  // its total split by runtime (`estimated`), so a system is the sum of its rooms.
+  const params = new URLSearchParams({ start: win.start, end: win.end });
   const { data, isLoading, error } = useQuery({
     queryKey: ['aircon-energy', homeId, win.start, win.end],
     queryFn: () =>
-      fetchJson(`/api/hub/stats/${encodeURIComponent(homeId)}/readings?${params.toString()}`),
+      fetchJson(`/api/hub/stats/${encodeURIComponent(homeId)}/aircon-energy?${params.toString()}`),
     enabled: Boolean(homeId),
   });
 
@@ -85,27 +78,41 @@ export default function AirconEnergyCard({ homeId, win, units, groups }) {
 
   const systems = airconSystems(units, groups);
   const byDay = new Map(); // YYYY-MM-DD -> {entity: Wh}
+  const estimated = new Set();
   for (const row of data) {
-    if (row.value == null) continue;
-    const day = dayjs(row.ts).format('YYYY-MM-DD');
-    if (!byDay.has(day)) byDay.set(day, {});
-    byDay.get(day)[row.source_entity_id] = Number(row.value);
+    if (!byDay.has(row.date)) byDay.set(row.date, {});
+    byDay.get(row.date)[row.source_entity_id] = Number(row.wh);
+    if (row.estimated) estimated.add(row.source_entity_id);
   }
+  const sumWh = (members, whBy) => {
+    const vals = members.map((m) => whBy[m]).filter((v) => typeof v === 'number');
+    return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+  };
   const today = dayjs().format('YYYY-MM-DD');
   const points = [...byDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([day, whBy]) => {
       const point = { day };
-      for (const s of systems) point[s.key] = kwh(systemWh(s.members, whBy));
+      for (const s of systems) point[s.key] = kwh(sumWh(s.members, whBy));
+      for (const u of units) point[u.id] = kwh(whBy[u.id] ?? null);
       return point;
     });
 
   const fullDays = points.filter((p) => p.day !== today);
-  const totals = systems.map((s, i) => {
-    const total = points.reduce((acc, p) => acc + (p[s.key] ?? 0), 0);
-    const full = fullDays.reduce((acc, p) => acc + (p[s.key] ?? 0), 0);
-    return { ...s, slot: SLOTS[i % SLOTS.length], total, perDay: fullDays.length ? full / fullDays.length : null };
-  });
+  const totalOf = (key) => points.reduce((acc, p) => acc + (p[key] ?? 0), 0);
+  const perDayOf = (key) =>
+    fullDays.length ? fullDays.reduce((acc, p) => acc + (p[key] ?? 0), 0) / fullDays.length : null;
+  const totals = systems.map((s, i) => ({
+    ...s, slot: SLOTS[i % SLOTS.length], total: totalOf(s.key), perDay: perDayOf(s.key),
+  }));
+  const nameOf = Object.fromEntries(units.map((u) => [u.id, u.name || u.id]));
+  // Table: one row per room, under its outdoor unit's colour.
+  const rooms = totals.flatMap((s) =>
+    s.members.map((m) => ({
+      key: m, name: nameOf[m] ?? m, system: s, estimated: estimated.has(m),
+      total: totalOf(m), perDay: perDayOf(m),
+    })),
+  );
   const grand = totals.reduce((acc, t) => acc + t.total, 0);
 
   return (
@@ -158,22 +165,27 @@ export default function AirconEnergyCard({ homeId, win, units, groups }) {
         size="small"
         rowKey="key"
         pagination={false}
-        dataSource={totals}
+        dataSource={rooms}
         columns={[
           {
-            title: 'System (outdoor unit)',
-            key: 'label',
-            render: (_, s) => (
+            title: 'Room',
+            key: 'name',
+            render: (_, r) => (
               <span>
                 <span
                   style={{
                     display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 8,
-                    background: dark ? s.slot.dark : s.slot.light,
+                    background: dark ? r.system.slot.dark : r.system.slot.light,
                   }}
                 />
-                {s.label} {s.shared && <Tag style={{ marginLeft: 4 }}>shared condenser</Tag>}
+                {r.name} {r.estimated && <Tag style={{ marginLeft: 4 }}>estimated</Tag>}
               </span>
             ),
+          },
+          {
+            title: 'Outdoor unit',
+            key: 'system',
+            render: (_, r) => (r.system.shared ? `Shared · ${fmt(r.system.total)}` : 'Own'),
           },
           { title: 'Total', dataIndex: 'total', align: 'right', render: fmt },
           {
@@ -186,14 +198,14 @@ export default function AirconEnergyCard({ homeId, win, units, groups }) {
             title: 'Share',
             key: 'share',
             align: 'right',
-            render: (_, s) => (grand ? `${Math.round((100 * s.total) / grand)}%` : '—'),
+            render: (_, r) => (grand ? `${Math.round((100 * r.total) / grand)}%` : '—'),
           },
         ]}
       />
       <Text type="secondary" style={{ fontSize: 12 }}>
-        Daikin&apos;s own estimate per outdoor unit, read hourly; the last bar is today so far. Indoor
-        units sharing a condenser report its total, so they&apos;re counted once — set the grouping on
-        the home&apos;s Daikin connection.
+        Daikin&apos;s own estimate per outdoor unit, read hourly; the last bar is today so far. Rooms
+        sharing an outdoor unit get its total split by how long each ran that day (estimated) — set
+        the grouping on the home&apos;s Daikin connection.
       </Text>
     </div>
   );

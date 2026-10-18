@@ -5,7 +5,8 @@
  * on one outdoor unit (condenser) reports that condenser's *total*. The home's
  * layout lives on its Daikin connection as `scope.outdoor_units`: a list of
  * groups of indoor-unit ids (`source_entity_id`) sharing a condenser. Any unit
- * not listed has its own. Never sum indoor units across a group.
+ * not listed has its own. Never sum raw per-unit readings across a group;
+ * eq-hub's aircon-energy rows are already split by runtime, so those can be.
  */
 
 /** The home's Daikin connection's outdoor-unit groups, or []. */
@@ -37,13 +38,4 @@ export function airconSystems(units, groups) {
 export function sharedWith(entityId, groups, nameOf) {
   const group = groups.find((g) => g.includes(entityId));
   return group ? group.filter((m) => m !== entityId).map(nameOf) : [];
-}
-
-/**
- * A condenser's energy for one day from its members' reported values: they all
- * report the same total (within ~3%), so take the largest rather than summing.
- */
-export function systemWh(members, whByEntity) {
-  const vals = members.map((m) => whByEntity[m]).filter((v) => typeof v === 'number');
-  return vals.length ? Math.max(...vals) : null;
 }

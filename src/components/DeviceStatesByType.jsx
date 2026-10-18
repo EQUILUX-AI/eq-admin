@@ -1,9 +1,8 @@
 'use client';
 
 import { Alert, Empty, Tabs, Typography } from 'antd';
-import dayjs from 'dayjs';
-
 import { sharedWith } from '@/lib/aircon';
+import AirconUnitEnergyChart from './AirconUnitEnergyChart';
 import DeviceHistoryChart from './DeviceHistoryChart';
 import LatestStatesTable from './LatestStatesTable';
 
@@ -63,7 +62,7 @@ function DevicePanel({ homeId, rows, win, groups, nameOf }) {
           type="info"
           showIcon
           message={`Shared outdoor unit with ${shared.join(', ')}`}
-          description="This unit's energy is the whole condenser's total, not this room's share."
+          description="Daikin reports the outdoor unit's total; this room's energy is its share by runtime, an estimate."
         />
       )}
       <LatestStatesTable rows={rows} />
@@ -78,17 +77,7 @@ function DevicePanel({ homeId, rows, win, groups, nameOf }) {
         />
       )}
       {canChart && dailyEnergy && (
-        <DeviceHistoryChart
-          homeId={homeId}
-          source={first.source}
-          entityId={first.source_entity_id}
-          metric="energy_wh"
-          // Daily rows are stamped at local midnight: query local-midnight
-          // instants, not bare dates (read as UTC midnight upstream).
-          win={{ start: dayjs(win.start).format(), end: dayjs(win.end).format() }}
-          title="Daily energy (Wh per day; today so far)"
-          dots
-        />
+        <AirconUnitEnergyChart homeId={homeId} entityId={first.source_entity_id} win={win} />
       )}
       {canChart && hasSessions && (
         <DeviceHistoryChart
