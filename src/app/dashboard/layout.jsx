@@ -12,6 +12,7 @@ const { Text } = Typography;
 const NAV = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/dashboard/connections', label: 'Connections' },
+  { href: '/dashboard/report-templates', label: 'Report templates' },
 ];
 
 function readUserCookie() {
