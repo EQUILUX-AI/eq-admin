@@ -311,24 +311,13 @@ function sharedAccount(accounts, provider) {
 /** Owners who agreed in the app to Equilux linking a staff-linked vendor
  *  (FusionSolar): connections in status `requested`, oldest first. Once the
  *  vendor has added the home to the Equilux account, Connect fills in the
- *  account + plant; saving moves it to pending and off this list. Decline
- *  deletes the request (the owner can ask again). */
+ *  account + plant; saving moves it to pending and off this list. A request
+ *  stays here until it's connected. */
 function RequestedConnectionsSection({ accounts }) {
-  const { message } = App.useApp();
-  const queryClient = useQueryClient();
   const [modal, setModal] = useState({ open: false, connection: null });
   const requested = useQuery({
     queryKey: ['requested-connections'],
     queryFn: () => fetchJson(`${CONNECTIONS_URL}?status=requested`),
-  });
-  const decline = useMutation({
-    mutationFn: (c) => mutateJson(`${CONNECTIONS_URL}/${c.id}?home=${encodeURIComponent(c.home)}`, 'DELETE'),
-    onSuccess: (_, c) => {
-      message.success('Request declined');
-      queryClient.invalidateQueries({ queryKey: ['requested-connections'] });
-      queryClient.invalidateQueries({ queryKey: ['provider-connections', c.home] });
-    },
-    onError: (e) => message.error(e.message),
   });
 
   const columns = [
@@ -346,20 +335,9 @@ function RequestedConnectionsSection({ accounts }) {
       key: 'actions',
       align: 'right',
       render: (_, c) => (
-        <Space>
-          <Button size="small" type="primary" onClick={() => setModal({ open: true, connection: c })}>
-            Connect
-          </Button>
-          <Popconfirm
-            title="Decline this request?"
-            description="It leaves this list; the owner can ask again from the app."
-            onConfirm={() => decline.mutate(c)}
-          >
-            <Button size="small" danger loading={decline.isPending && decline.variables?.id === c.id}>
-              Decline
-            </Button>
-          </Popconfirm>
-        </Space>
+        <Button size="small" type="primary" onClick={() => setModal({ open: true, connection: c })}>
+          Connect
+        </Button>
       ),
     },
   ];
@@ -468,10 +446,17 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     });
   };
 
-  const stationOptions = (stations.data?.stations ?? []).map((s) => ({
-    value: s.code,
-    label: `${s.name || s.code} (${s.code})`,
-  }));
+  // A plant already linked to another home can't be picked (eq-hub refuses it
+  // too); this home's own plants stay selectable.
+  const stationOptions = (stations.data?.stations ?? []).map((s) => {
+    const elsewhere = s.linked_home && s.linked_home.id !== homeId;
+    const label = `${s.name || s.code} (${s.code})`;
+    return {
+      value: s.code,
+      label: elsewhere ? `${label} — Linked to ${s.linked_home.name || s.linked_home.id}` : label,
+      disabled: Boolean(elsewhere),
+    };
+  });
   // Keep already-saved codes selectable even if the account no longer lists them.
   for (const code of connection?.scope?.station_codes ?? []) {
     if (!stationOptions.some((o) => o.value === code)) stationOptions.push({ value: code, label: code });
