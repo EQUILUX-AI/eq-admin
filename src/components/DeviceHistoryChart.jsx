@@ -151,7 +151,7 @@ export default function DeviceHistoryChart({ homeId, source, entityId, metric, w
               name={dir === 'value' ? metric : dir}
               stroke={dark ? DIR_COLORS[dir]?.dark : DIR_COLORS[dir]?.light}
               strokeWidth={2}
-              dot={metric === 'session_kwh' ? { r: 3 } : false}
+              dot={metric === 'session_kwh' ? { r: 4 } : false}
               connectNulls
               isAnimationActive={false}
             />

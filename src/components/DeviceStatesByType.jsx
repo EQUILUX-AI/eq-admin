@@ -1,11 +1,16 @@
 'use client';
 
-import { Empty, Tabs, Typography } from 'antd';
-
+import { Alert, Empty, Tabs, Typography } from 'antd';
+import { sharedWith } from '@/lib/aircon';
+import AirconUnitEnergyChart from './AirconUnitEnergyChart';
 import DeviceHistoryChart from './DeviceHistoryChart';
 import LatestStatesTable from './LatestStatesTable';
 
 const { Text } = Typography;
+
+// Sources whose energy_wh is one row per local day (Daikin's per-unit daily
+// energy), not a meter counter: charted on its own, never as the primary metric.
+const DAILY_ENERGY_SOURCES = new Set(['daikin']);
 
 // Primary metric to chart per device, most-preferred first. A device that
 // reports any of these (e.g. a solar inverter's power_w) gets a timeseries graph.
@@ -41,13 +46,25 @@ function groupBy(rows, key) {
 /** One device: its current-state table, plus timeseries graph(s) over the
  *  selected window when it reports chartable metrics. Charging energy
  *  (session_kwh) is drawn as its own separate graph. */
-function DevicePanel({ homeId, rows, win }) {
-  const metric = pickChartMetric(rows);
-  const hasSessions = rows.some((r) => r.metric === 'session_kwh' && r.value != null);
+function DevicePanel({ homeId, rows, win, groups, nameOf }) {
   const first = rows[0];
+  const dailyEnergy =
+    DAILY_ENERGY_SOURCES.has(first.source) &&
+    rows.some((r) => r.metric === 'energy_wh' && r.value != null);
+  const metric = pickChartMetric(dailyEnergy ? rows.filter((r) => r.metric !== 'energy_wh') : rows);
+  const hasSessions = rows.some((r) => r.metric === 'session_kwh' && r.value != null);
   const canChart = Boolean(homeId && win);
+  const shared = dailyEnergy ? sharedWith(first.source_entity_id, groups, nameOf) : [];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {shared.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          message={`Shared outdoor unit with ${shared.join(', ')}`}
+          description="Daikin reports the outdoor unit's total; this room's energy is its share by runtime, an estimate."
+        />
+      )}
       <LatestStatesTable rows={rows} />
       {canChart && metric && (
         <DeviceHistoryChart
@@ -58,6 +75,9 @@ function DevicePanel({ homeId, rows, win }) {
           win={win}
           title={METRIC_TITLES[metric] ?? metric}
         />
+      )}
+      {canChart && dailyEnergy && (
+        <AirconUnitEnergyChart homeId={homeId} entityId={first.source_entity_id} win={win} />
       )}
       {canChart && hasSessions && (
         <DeviceHistoryChart
@@ -78,7 +98,7 @@ function DevicePanel({ homeId, rows, win }) {
  * section; a type with more than one device tabs through its devices (labelled
  * by their friendly name), otherwise the single device's panel renders directly.
  */
-export default function DeviceStatesByType({ rows, loading, homeId, win }) {
+export default function DeviceStatesByType({ rows, loading, homeId, win, groups = [] }) {
   if (loading && (!rows || rows.length === 0)) {
     return <LatestStatesTable rows={[]} loading />;
   }
@@ -87,6 +107,8 @@ export default function DeviceStatesByType({ rows, loading, homeId, win }) {
   }
 
   const byType = groupBy(rows, typeLabel);
+  const names = new Map(rows.map((r) => [r.source_entity_id, deviceLabel(r)]));
+  const nameOf = (id) => names.get(id) ?? id;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -104,11 +126,13 @@ export default function DeviceStatesByType({ rows, loading, homeId, win }) {
                 items={byDevice.map(([entityId, deviceRows]) => ({
                   key: entityId,
                   label: deviceLabel(deviceRows[0]),
-                  children: <DevicePanel homeId={homeId} rows={deviceRows} win={win} />,
+                  children: (
+                    <DevicePanel homeId={homeId} rows={deviceRows} win={win} groups={groups} nameOf={nameOf} />
+                  ),
                 }))}
               />
             ) : (
-              <DevicePanel homeId={homeId} rows={typeRows} win={win} />
+              <DevicePanel homeId={homeId} rows={typeRows} win={win} groups={groups} nameOf={nameOf} />
             )}
           </div>
         );

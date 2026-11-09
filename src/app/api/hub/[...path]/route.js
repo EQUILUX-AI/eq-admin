@@ -41,7 +41,11 @@ function refreshOnce(refreshToken) {
   return pending;
 }
 
-export async function GET(request, { params }) {
+/**
+ * Shared proxy handler. GET forwards with no body; POST/PATCH/DELETE forward the
+ * request's JSON body as-is (eq-hub validates it). A 204 passes through empty.
+ */
+async function proxy(request, { params }) {
   const store = await cookies();
   const access = store.get(ACCESS_COOKIE)?.value;
   const refresh = store.get(REFRESH_COOKIE)?.value;
@@ -59,9 +63,18 @@ export async function GET(request, { params }) {
   // eq-hub is DRF with APPEND_SLASH — end the path in a slash so the GET isn't
   // 301-redirected (a redirect would drop the Authorization header).
   const target = `${base.replace(/\/$/, '')}/api/${path.join('/')}/${search}`;
+  const method = request.method;
+  // Read the body once up front — a refresh-and-retry re-sends the same payload.
+  const payload = method === 'GET' ? undefined : (await request.text()) || undefined;
   const callHub = (token) =>
     fetch(target, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        ...(payload ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: payload,
       cache: 'no-store',
     });
 
@@ -87,7 +100,7 @@ export async function GET(request, { params }) {
     }
 
     const body = await res.text();
-    const out = new NextResponse(body, {
+    const out = new NextResponse(res.status === 204 ? null : body, {
       status: res.status,
       headers: { 'Content-Type': res.headers.get('Content-Type') ?? 'application/json' },
     });
@@ -102,3 +115,8 @@ export async function GET(request, { params }) {
     );
   }
 }
+
+export const GET = proxy;
+export const POST = proxy;
+export const PATCH = proxy;
+export const DELETE = proxy;

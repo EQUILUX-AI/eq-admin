@@ -5,10 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 
+import AirconEnergyCard from '@/components/AirconEnergyCard';
 import DeviceStatesByType from '@/components/DeviceStatesByType';
 import EnergyTimeseriesChart from '@/components/EnergyTimeseriesChart';
 import WeatherPanel from '@/components/WeatherPanel';
 import WeeklySummaryCards from '@/components/WeeklySummaryCards';
+import { outdoorUnits } from '@/lib/aircon';
 import { fetchJson } from '@/lib/api';
 
 const { Title, Text } = Typography;
@@ -142,6 +144,26 @@ export default function DashboardPage() {
     enabled,
   });
 
+  // The home's connections carry the aircon outdoor-unit layout (Daikin
+  // scope.outdoor_units). Kept out of `anyError`: without it every aircon just
+  // counts as its own system.
+  const connections = useQuery({
+    queryKey: ['provider-connections', homeId],
+    queryFn: () =>
+      fetchJson(`/api/hub/admin/provider-connections?home=${encodeURIComponent(homeId)}`),
+    enabled,
+  });
+  const groups = outdoorUnits(
+    Array.isArray(connections.data) ? connections.data : connections.data?.results,
+  );
+  const airconUnits = [
+    ...new Map(
+      (states.data ?? [])
+        .filter((r) => r.source === 'daikin')
+        .map((r) => [r.source_entity_id, { id: r.source_entity_id, name: r.device_name }]),
+    ).values(),
+  ];
+
   const anyError = summary.error || series.error || states.error;
 
   return (
@@ -218,6 +240,17 @@ export default function DashboardPage() {
             <EnergyTimeseriesChart data={series.data} />
           </Card>
 
+          {airconUnits.length > 0 && (
+            <Card title={`Aircon energy by outdoor unit (${windowDays(globalWin)} days)`}>
+              <AirconEnergyCard
+                homeId={homeId}
+                win={globalWin}
+                units={airconUnits}
+                groups={groups}
+              />
+            </Card>
+          )}
+
           <Card
             title="Current device states"
             extra={
@@ -234,6 +267,7 @@ export default function DashboardPage() {
               loading={states.isLoading}
               homeId={homeId}
               win={deviceWin}
+              groups={groups}
             />
           </Card>
 
