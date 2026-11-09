@@ -10,6 +10,10 @@ export const BLOCK_LABELS = {
   insight: 'Insight (AI text + mini chart)',
   text: 'Text',
   recommendations: 'Recommendations (AI)',
+  value_hero: 'Savings headline (solar vs Equilux)',
+  bill_compare: 'Bill with vs without solar',
+  automations: 'What automations saved',
+  suggestions: 'Priced suggestions',
 };
 
 export const COMPARE_LABELS = { prev: 'vs previous month', avg: 'vs average of earlier months' };
@@ -28,6 +32,12 @@ export function newBlock(type, firstMetric) {
       return { type, topic: 'energy', title: 'Insight', color: 'teal' };
     case 'recommendations':
       return { type, max: 4, intro: '' };
+    // Owner-value blocks have no settings: they show eq-ai's value figures.
+    case 'value_hero':
+    case 'bill_compare':
+    case 'automations':
+    case 'suggestions':
+      return { type };
     default:
       return { type: 'text', text: 'Text', style: 'body' };
   }
