@@ -32,14 +32,17 @@ const CONNECTIONS_URL = '/api/hub/admin/provider-connections';
 // Shared with the dashboard page — the operator's last-viewed home id.
 const PREFS_KEY = 'eq.dashboard';
 
-// Providers whose credentials are managed here. SP Digital is deliberately
-// absent: its connections are script-seeded and shown read-only.
+// Providers whose credentials are managed here. SP Digital runs on a shared
+// Equilux login; older SP rows without an account stay read-only (eq-ai-seeded).
 const PROVIDERS = [
   { value: 'fusionsolar', label: 'FusionSolar' },
+  { value: 'sp_digital', label: 'SP Digital' },
   { value: 'wallbox', label: 'Wallbox' },
   { value: 'daikin', label: 'Daikin' },
 ];
-const PROVIDER_LABELS = { ...Object.fromEntries(PROVIDERS.map((p) => [p.value, p.label])), sp_digital: 'SP Digital' };
+const PROVIDER_LABELS = Object.fromEntries(PROVIDERS.map((p) => [p.value, p.label]));
+// Run on Equilux's shared (aggregated) logins: new accounts default to aggregated.
+const SHARED_PROVIDERS = ['fusionsolar', 'sp_digital'];
 
 // Credential shape per provider (see eq-ai adapters). `secret` renders a password input.
 const CREDENTIAL_FIELDS = {
@@ -47,6 +50,7 @@ const CREDENTIAL_FIELDS = {
     { name: 'username', label: 'Username' },
     { name: 'system_code', label: 'System code', secret: true },
   ],
+  sp_digital: [{ name: 'refresh_token', label: 'Refresh token (from the SP login script)', secret: true }],
   wallbox: [
     { name: 'email', label: 'Email' },
     { name: 'password', label: 'Password', secret: true },
@@ -86,8 +90,14 @@ function AccountModal({ open, account, onClose }) {
     form.resetFields();
     form.setFieldsValue(
       account
-        ? { provider: account.provider, label: account.label, aggregated: account.aggregated, base_url: account.base_url }
-        : { provider: 'fusionsolar', aggregated: true, base_url: '' },
+        ? {
+            provider: account.provider,
+            label: account.label,
+            aggregated: account.aggregated,
+            base_url: account.base_url,
+            invite_email: account.invite_email ?? '',
+          }
+        : { provider: 'fusionsolar', aggregated: true, base_url: '', invite_email: '' },
     );
   }, [open, account, form]);
 
@@ -110,8 +120,9 @@ function AccountModal({ open, account, onClose }) {
     const body = {
       provider: values.provider,
       label: values.label,
-      aggregated: Boolean(values.aggregated),
+      aggregated: values.provider === 'sp_digital' || Boolean(values.aggregated),
       base_url: values.base_url ?? '',
+      invite_email: values.provider === 'sp_digital' ? (values.invite_email ?? '').trim() : '',
     };
     if (filled.length === fields.length) {
       body.credentials = Object.fromEntries(fields.map((f) => [f.name, creds[f.name].trim()]));
@@ -138,7 +149,7 @@ function AccountModal({ open, account, onClose }) {
           <Select
             options={PROVIDERS}
             disabled={editing}
-            onChange={(v) => form.setFieldValue('aggregated', v === 'fusionsolar')}
+            onChange={(v) => form.setFieldValue('aggregated', SHARED_PROVIDERS.includes(v))}
           />
         </Form.Item>
         <Form.Item name="label" label="Label" rules={[{ required: true }]}>
@@ -149,11 +160,22 @@ function AccountModal({ open, account, onClose }) {
           label="Aggregated (one account covering many homes)"
           valuePropName="checked"
         >
-          <Switch />
+          {/* SP Digital only runs on the shared login. */}
+          <Switch disabled={provider === 'sp_digital'} />
         </Form.Item>
         <Form.Item name="base_url" label="Base URL">
           <Input placeholder="https://…" />
         </Form.Item>
+        {provider === 'sp_digital' && (
+          <Form.Item
+            name="invite_email"
+            label="Invite email"
+            extra="The SP login owners share their home with. The app shows the newest shared SP account's email, so add a new account to move new homes to a fresh login."
+            rules={[{ type: 'email' }]}
+          >
+            <Input placeholder="sp1@equilux-ai.com" autoComplete="off" />
+          </Form.Item>
+        )}
         <Text type="secondary">
           {editing ? 'Credentials — leave blank to keep the current ones.' : 'Credentials'}
         </Text>
@@ -189,6 +211,7 @@ function AccountsSection({ accounts }) {
 
   const list = rows(accounts.data);
   const hasCount = list.some((a) => a.connection_count !== undefined);
+  const currentSp = currentSpLogin(list);
 
   const columns = [
     { title: 'Label', dataIndex: 'label' },
@@ -199,6 +222,19 @@ function AccountsSection({ accounts }) {
       render: (v) => (v ? <Tag color="purple">Aggregated</Tag> : <Tag>Per user</Tag>),
     },
     { title: 'Base URL', dataIndex: 'base_url', render: (v) => v || <Text type="secondary">default</Text> },
+    {
+      title: 'Invite email',
+      key: 'invite_email',
+      render: (_, a) =>
+        a.invite_email ? (
+          <Space size={4}>
+            {a.invite_email}
+            {a.id === currentSp?.id && <Tag color="green">Current</Tag>}
+          </Space>
+        ) : (
+          <Text type="secondary">—</Text>
+        ),
+    },
     ...(hasCount ? [{ title: 'Connections', dataIndex: 'connection_count' }] : []),
     {
       title: '',
@@ -302,8 +338,18 @@ function OutdoorUnitsField({ homeId, open }) {
   );
 }
 
-/** Equilux's shared (aggregated) account id for a provider, when there's exactly one. */
+/** The current SP Digital login: the newest shared account with an invite
+ *  email — the one the app asks owners to invite (eq-hub serializers.invite_email). */
+function currentSpLogin(accounts) {
+  return accounts
+    .filter((a) => a.provider === 'sp_digital' && a.aggregated && a.invite_email)
+    .reduce((best, a) => (!best || dayjs(a.created).isAfter(dayjs(best.created)) ? a : best), null);
+}
+
+/** Equilux's shared (aggregated) account id for a provider: SP Digital's
+ *  current login, or FusionSolar's only shared account if there's exactly one. */
 function sharedAccount(accounts, provider) {
+  if (provider === 'sp_digital') return currentSpLogin(accounts)?.id;
   const shared = accounts.filter((a) => a.provider === provider && a.aggregated);
   return shared.length === 1 ? shared[0].id : undefined;
 }
@@ -368,7 +414,8 @@ function RequestedConnectionsSection({ accounts }) {
     <Card title="Waiting to be linked">
       <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
         These owners agreed in the app to Equilux linking their home. FusionSolar: ask Huawei to add the
-        plant to the Equilux account, then Connect and pick the plant.
+        plant to the Equilux account, then Connect and pick the plant. SP Digital: the owner shares their
+        home with the current SP login in the SP app; Connect and enter the home's premise id.
       </Text>
       {requested.isError && <Alert type="error" showIcon message={requested.error.message} style={{ marginBottom: 16 }} />}
       <Table
@@ -405,7 +452,11 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
   // Completing an owner's request: provider fixed, account defaults to the
   // shared one (derived id, so a refetch of the list doesn't reset the form).
   const completing = connection?.status === 'requested';
-  const defaultAccount = completing ? sharedAccount(accounts, connection.provider) : undefined;
+  // SP Digital always goes on the current SP login; staff never pick it.
+  // An SP request remembers the login the owner was shown (scope.invited_account).
+  const defaultAccount = completing || connection?.provider === 'sp_digital'
+    ? connection.scope?.invited_account ?? sharedAccount(accounts, connection.provider)
+    : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -419,6 +470,7 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
             account: connection.account ?? defaultAccount,
             enabled: connection.enabled ?? true,
             station_codes: connection.scope?.station_codes ?? [],
+            premise_id: connection.scope?.premise_id ?? '',
             outdoor_units: outdoorUnits([connection]),
           }
         : { provider: 'fusionsolar', enabled: true, station_codes: [], outdoor_units: [] },
@@ -429,6 +481,8 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
 
   const account = accounts.find((a) => a.id === accountId);
   const needsStations = account?.aggregated && account?.provider === 'fusionsolar';
+  // A shared SP login sees every home that invited it; this home is its premise.
+  const needsPremise = account?.aggregated && account?.provider === 'sp_digital';
 
   const stations = useQuery({
     queryKey: ['account-stations', accountId],
@@ -436,6 +490,30 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     enabled: open && Boolean(needsStations),
     retry: false,
   });
+
+  // The premises the shared SP login can see, each marked linked or not, and —
+  // for this connection's home — why an unlinked one looks like it.
+  const premises = useQuery({
+    queryKey: ['account-premises', accountId, connection?.id ?? null],
+    queryFn: () =>
+      fetchJson(
+        `${ACCOUNTS_URL}/${accountId}/premises${connection?.id ? `?connection=${encodeURIComponent(connection.id)}` : ''}`,
+      ),
+    enabled: open && Boolean(needsPremise),
+    retry: false,
+  });
+  const premiseRows = premises.data?.premises ?? [];
+  const currentPremise = connection?.scope?.premise_id;
+  const premiseChoices = premiseRows.filter((p) => !p.linked_home || p.id === currentPremise);
+  const matched = premiseChoices.filter((p) => p.match?.length);
+  const premiseId = Form.useWatch('premise_id', form);
+  const chosenPremise = premiseRows.find((p) => p.id === premiseId);
+
+  // One clear match for a request: preselect it; staff confirm by saving.
+  useEffect(() => {
+    if (!open || !completing || form.getFieldValue('premise_id')) return;
+    if (matched.length === 1) form.setFieldValue('premise_id', matched[0].id);
+  }, [open, completing, matched, form]);
 
   const save = useMutation({
     mutationFn: (body) =>
@@ -454,6 +532,9 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     // Keep any other scope keys (e.g. charger_ids) the connection already has.
     const scope = { ...(connection?.scope ?? {}) };
     if (needsStations) scope.station_codes = values.station_codes ?? [];
+    if (needsPremise) scope.premise_id = (values.premise_id ?? '').trim();
+    // The request's marker is replaced by the real account + premise.
+    delete scope.invited_account;
     if (values.provider === 'daikin') {
       const groups = (values.outdoor_units ?? []).filter((g) => g?.length >= 2);
       if (groups.length) scope.outdoor_units = groups;
@@ -488,7 +569,16 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
       destroyOnHidden
     >
       {save.isError && <Alert type="error" showIcon message={save.error.message} style={{ marginBottom: 16 }} />}
-      {completing && !defaultAccount && (
+      {provider === 'sp_digital' && !(connection?.scope?.invited_account || sharedAccount(accounts, 'sp_digital')) && (
+        <Alert
+          type="warning"
+          showIcon
+          message="No current SP login"
+          description="Add a shared SP Digital account with an invite email under Accounts first (or wait for accounts to load)."
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {completing && provider !== 'sp_digital' && !defaultAccount && (
         <Alert
           type="warning"
           showIcon
@@ -502,11 +592,18 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
           <Select
             disabled={completing}
             options={PROVIDERS}
-            onChange={() => form.setFieldsValue({ account: undefined, station_codes: [] })}
+            onChange={(v) =>
+              form.setFieldsValue({
+                account: v === 'sp_digital' ? sharedAccount(accounts, v) : undefined,
+                station_codes: [],
+              })
+            }
           />
         </Form.Item>
         <Form.Item name="account" label="Account" rules={[{ required: true }]}>
           <Select
+            // SP Digital goes on the current SP login — the one owners invite.
+            disabled={provider === 'sp_digital'}
             placeholder="Pick an account"
             options={accounts
               .filter((a) => a.provider === provider)
@@ -532,6 +629,50 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
             >
               <Select mode="multiple" loading={stations.isLoading} options={stationOptions} optionFilterProp="label" />
             </Form.Item>
+          </>
+        )}
+        {needsPremise && (
+          <>
+            {premises.isError && (
+              <Alert
+                type="error"
+                showIcon
+                message="Couldn't load the SP login's premises"
+                description={premises.error.message}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            <Form.Item
+              name="premise_id"
+              label="SP premise for this home"
+              extra={
+                matched.length > 1
+                  ? 'More than one premise matches this home — check the address.'
+                  : 'Premises shared with the SP login and not yet linked to a home.'
+              }
+              rules={[{ required: true, message: 'Pick the premise — a shared SP login must be scoped.' }]}
+            >
+              <Select
+                loading={premises.isLoading}
+                optionFilterProp="label"
+                showSearch
+                options={premiseChoices.map((p) => ({
+                  value: p.id,
+                  label: `${p.address || 'No address'} (${p.id})${p.match?.length ? ` — matches ${p.match.map((m) => (m === 'postal_code' ? 'postal code' : 'owner email')).join(' + ')}` : ''}`,
+                }))}
+                notFoundContent={premises.isLoading ? 'Loading…' : 'No unlinked premises — has the owner shared their home?'}
+              />
+            </Form.Item>
+            {chosenPremise && !chosenPremise.full_access && (
+              <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+                message="The SP login doesn't have Full access to this premise"
+                description="Usage may be hidden. Ask the owner to change the share to Full access in the SP app." />
+            )}
+            {chosenPremise && !chosenPremise.smart_meter && (
+              <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+                message="No smart meter on this premise"
+                description="eq-ai reads SP's half-hourly smart-meter data, so this home won't get readings." />
+            )}
           </>
         )}
         {provider === 'daikin' && <OutdoorUnitsField homeId={homeId} open={open} />}
@@ -602,6 +743,7 @@ function ConnectionsSection({ accounts }) {
           const n = outdoorUnits([c]).length;
           return n ? `${n} shared outdoor unit${n > 1 ? 's' : ''}` : <Text type="secondary">no shared outdoor units</Text>;
         }
+        if (c.scope?.premise_id) return `Premise ${c.scope.premise_id}`;
         return (c.scope?.station_codes ?? []).join(', ') || <Text type="secondary">—</Text>;
       },
     },
@@ -616,7 +758,8 @@ function ConnectionsSection({ accounts }) {
       key: 'actions',
       align: 'right',
       render: (_, c) =>
-        c.provider === 'sp_digital' ? (
+        // Older SP rows hold their own login in eq-ai and aren't managed here.
+        c.provider === 'sp_digital' && !c.account && c.status !== 'requested' ? (
           <Text type="secondary">Read-only</Text>
         ) : (
           <Space>
@@ -693,7 +836,8 @@ export default function ConnectionsPage() {
           </Title>
           <Text type="secondary">
             Accounts hold vendor credentials (stored encrypted in eq-ai, never in eq-hub). An aggregated
-            account is shared across homes; each home connection picks its stations. SP Digital is read-only.
+            account is shared across homes; each home connection picks its stations (FusionSolar) or premise (SP
+            Digital). Older SP Digital rows without an account are read-only.
           </Text>
         </div>
         <RequestedConnectionsSection accounts={rows(accounts.data)} />
