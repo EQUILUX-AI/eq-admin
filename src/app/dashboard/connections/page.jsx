@@ -64,6 +64,7 @@ const CREDENTIAL_FIELDS = {
 const rows = (data) => (Array.isArray(data) ? data : data?.results ?? []);
 
 const STATUS_COLORS = {
+  requested: 'gold',
   connected: 'green',
   pending: 'blue',
   expired: 'orange',
@@ -301,6 +302,74 @@ function OutdoorUnitsField({ homeId, open }) {
   );
 }
 
+/** Equilux's shared (aggregated) account id for a provider, when there's exactly one. */
+function sharedAccount(accounts, provider) {
+  const shared = accounts.filter((a) => a.provider === provider && a.aggregated);
+  return shared.length === 1 ? shared[0].id : undefined;
+}
+
+/** Owners who agreed in the app to Equilux linking a staff-linked vendor
+ *  (FusionSolar): connections in status `requested`, oldest first. Once the
+ *  vendor has added the home to the Equilux account, Connect fills in the
+ *  account + plant; saving moves it to pending and off this list. A request
+ *  stays here until it's connected. */
+function RequestedConnectionsSection({ accounts }) {
+  const [modal, setModal] = useState({ open: false, connection: null });
+  const requested = useQuery({
+    queryKey: ['requested-connections'],
+    queryFn: () => fetchJson(`${CONNECTIONS_URL}?status=requested`),
+  });
+
+  const columns = [
+    { title: 'Home', key: 'home', render: (_, c) => (
+      <Space direction="vertical" size={0}>
+        {c.home_name || <Text type="secondary">unnamed</Text>}
+        <Text type="secondary" copyable style={{ fontSize: 12 }}>{c.home}</Text>
+      </Space>
+    ) },
+    { title: 'Owner', dataIndex: 'owner_email', render: (v) => (v ? <Text copyable>{v}</Text> : '—') },
+    { title: 'Provider', dataIndex: 'provider', render: (p) => PROVIDER_LABELS[p] ?? p },
+    { title: 'Agreed', dataIndex: 'created', render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+    {
+      title: '',
+      key: 'actions',
+      align: 'right',
+      render: (_, c) => (
+        <Button size="small" type="primary" onClick={() => setModal({ open: true, connection: c })}>
+          Connect
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <Card title="Waiting to be linked">
+      <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+        These owners agreed in the app to Equilux linking their home. FusionSolar: ask Huawei to add the
+        plant to the Equilux account, then Connect and pick the plant.
+      </Text>
+      {requested.isError && <Alert type="error" showIcon message={requested.error.message} style={{ marginBottom: 16 }} />}
+      <Table
+        rowKey="id"
+        size="small"
+        loading={requested.isLoading}
+        dataSource={rows(requested.data)}
+        columns={columns}
+        pagination={false}
+        locale={{ emptyText: 'No one waiting' }}
+        scroll={{ x: true }}
+      />
+      <ConnectionModal
+        open={modal.open}
+        connection={modal.connection}
+        homeId={modal.connection?.home ?? ''}
+        accounts={accounts}
+        onClose={() => setModal({ open: false, connection: null })}
+      />
+    </Card>
+  );
+}
+
 /** Create/edit one home's connection: provider, account, (for an aggregated
  *  FusionSolar account) the station codes this home is scoped to, and (for
  *  Daikin) which aircons share an outdoor unit. */
@@ -311,6 +380,10 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
   const provider = Form.useWatch('provider', form);
   const accountId = Form.useWatch('account', form);
   const editing = Boolean(connection);
+  // Completing an owner's request: provider fixed, account defaults to the
+  // shared one (derived id, so a refetch of the list doesn't reset the form).
+  const completing = connection?.status === 'requested';
+  const defaultAccount = completing ? sharedAccount(accounts, connection.provider) : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -319,14 +392,18 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
       connection
         ? {
             provider: connection.provider,
-            account: connection.account,
+            // A FusionSolar request has no account yet: it always goes on
+            // Equilux's shared one, so pick that.
+            account: connection.account ?? defaultAccount,
             enabled: connection.enabled ?? true,
             station_codes: connection.scope?.station_codes ?? [],
             outdoor_units: outdoorUnits([connection]),
           }
         : { provider: 'fusionsolar', enabled: true, station_codes: [], outdoor_units: [] },
     );
-  }, [open, connection, form]);
+    save.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on open only
+  }, [open, connection, defaultAccount, form]);
 
   const account = accounts.find((a) => a.id === accountId);
   const needsStations = account?.aggregated && account?.provider === 'fusionsolar';
@@ -346,6 +423,7 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     onSuccess: () => {
       message.success(editing ? 'Connection updated' : 'Connection created');
       queryClient.invalidateQueries({ queryKey: ['provider-connections', homeId] });
+      queryClient.invalidateQueries({ queryKey: ['requested-connections'] });
       onClose();
     },
   });
@@ -368,10 +446,17 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
     });
   };
 
-  const stationOptions = (stations.data?.stations ?? []).map((s) => ({
-    value: s.code,
-    label: `${s.name || s.code} (${s.code})`,
-  }));
+  // A plant already linked to another home can't be picked (eq-hub refuses it
+  // too); this home's own plants stay selectable.
+  const stationOptions = (stations.data?.stations ?? []).map((s) => {
+    const elsewhere = s.linked_home && s.linked_home.id !== homeId;
+    const label = `${s.name || s.code} (${s.code})`;
+    return {
+      value: s.code,
+      label: elsewhere ? `${label} — Linked to ${s.linked_home.name || s.linked_home.id}` : label,
+      disabled: Boolean(elsewhere),
+    };
+  });
   // Keep already-saved codes selectable even if the account no longer lists them.
   for (const code of connection?.scope?.station_codes ?? []) {
     if (!stationOptions.some((o) => o.value === code)) stationOptions.push({ value: code, label: code });
@@ -380,7 +465,7 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
   return (
     <Modal
       open={open}
-      title={editing ? 'Edit connection' : 'New connection'}
+      title={completing ? `Connect request — ${connection.home_name || connection.home}` : editing ? 'Edit connection' : 'New connection'}
       okText="Save"
       confirmLoading={save.isPending}
       onOk={() => form.submit()}
@@ -388,9 +473,19 @@ function ConnectionModal({ open, connection, homeId, accounts, onClose }) {
       destroyOnHidden
     >
       {save.isError && <Alert type="error" showIcon message={save.error.message} style={{ marginBottom: 16 }} />}
+      {completing && !defaultAccount && (
+        <Alert
+          type="warning"
+          showIcon
+          message="No single shared account found"
+          description="Couldn't pick Equilux's shared account for this provider (accounts not loaded, none, or more than one). Choose it below."
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Form form={form} layout="vertical" onFinish={onFinish}>
         <Form.Item name="provider" label="Provider" rules={[{ required: true }]}>
           <Select
+            disabled={completing}
             options={PROVIDERS}
             onChange={() => form.setFieldsValue({ account: undefined, station_codes: [] })}
           />
@@ -463,6 +558,7 @@ function ConnectionsSection({ accounts }) {
     onSuccess: () => {
       message.success('Connection deleted');
       queryClient.invalidateQueries({ queryKey: ['provider-connections', homeId] });
+      queryClient.invalidateQueries({ queryKey: ['requested-connections'] });
     },
     onError: (e) => message.error(e.message),
   });
@@ -585,6 +681,7 @@ export default function ConnectionsPage() {
             account is shared across homes; each home connection picks its stations. SP Digital is read-only.
           </Text>
         </div>
+        <RequestedConnectionsSection accounts={rows(accounts.data)} />
         <AccountsSection accounts={accounts} />
         <ConnectionsSection accounts={rows(accounts.data)} />
       </Space>
