@@ -18,7 +18,11 @@ function useSecondsLeft(expiresAt) {
   useEffect(() => {
     if (!expiresAt) return undefined;
     setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= expiresAt) clearInterval(id);
+    }, 1000);
     return () => clearInterval(id);
   }, [expiresAt]);
   return expiresAt ? Math.max(0, Math.ceil((expiresAt - now) / 1000)) : 0;
@@ -27,7 +31,8 @@ function useSecondsLeft(expiresAt) {
 /**
  * Confirm the operator's password, then show a one-time QR code that signs the
  * phone that scans it into the Equilux app as `target`. Mounted only while open,
- * so closing it discards the link.
+ * so closing it drops the link from the page — the code itself stays valid on
+ * eq-auth until it expires (there is no revoke), which the copy says.
  */
 function PhoneLoginModal({ target, onClose }) {
   const [form] = Form.useForm();
@@ -67,11 +72,19 @@ function PhoneLoginModal({ target, onClose }) {
           </Text>
           <Paragraph type="secondary" style={{ textAlign: 'center', marginBottom: 0 }}>
             Scan with the phone&apos;s camera to open the Equilux app as {name}. The session lasts 1 hour and
-            can&apos;t change their password or sign-in methods.
+            can&apos;t change their password or sign-in methods. Closing this doesn&apos;t cancel the code; it
+            works until it expires.
           </Paragraph>
         </Space>
       ) : (
-        <Form form={form} layout="vertical" requiredMark={false} onFinish={create.mutate}>
+        <Form
+          form={form}
+          layout="vertical"
+          requiredMark={false}
+          // Enter submits even while the button is loading; a second request
+          // would mint a second live code the page never shows.
+          onFinish={(values) => !create.isPending && create.mutate(values)}
+        >
           <Paragraph type="secondary">
             Confirm your password to create a one-time QR code. Every code and login is recorded in the audit
             log.

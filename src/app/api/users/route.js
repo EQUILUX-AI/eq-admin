@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { callWithSession, keepRotated } from '@/lib/session';
+import { callWithSession, passThrough } from '@/lib/session';
 
 // Query params passed on to eq-auth's user list; anything else is dropped.
 const PASSED_PARAMS = ['search', 'page', 'page_size'];
@@ -24,24 +24,14 @@ export async function GET(request) {
     if (value) query.set(key, value);
   }
 
-  try {
-    const { res, rotated, error } = await callWithSession((token) =>
+  const result = await callWithSession(
+    (token) =>
       fetch(`${authUrl}api/users/?${query}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         cache: 'no-store',
       }),
-    );
-    if (error) return error;
-
-    const out = new NextResponse(await res.text(), {
-      status: res.status,
-      headers: { 'Content-Type': res.headers.get('Content-Type') ?? 'application/json' },
-    });
-    return keepRotated(out, rotated);
-  } catch (error) {
-    return NextResponse.json(
-      { error: 'authUnreachable', detail: String(error?.message ?? error) },
-      { status: 502 },
-    );
-  }
+    { unreachable: 'authUnreachable' },
+  );
+  if (result.error) return result.error;
+  return passThrough(result, 'authUnreachable');
 }

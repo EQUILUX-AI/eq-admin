@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { callWithSession, keepRotated } from '@/lib/session';
+import { callWithSession, passThrough } from '@/lib/session';
 
 /**
  * Server-side proxy to eq-hub's `/api/*` surface.
@@ -45,23 +45,11 @@ async function proxy(request, { params }) {
       cache: 'no-store',
     });
 
-  try {
-    // Refreshes and retries once on a 401; a dead session comes back as `error`.
-    const { res, rotated, error } = await callWithSession(callHub);
-    if (error) return error;
-
-    const body = await res.text();
-    const out = new NextResponse(res.status === 204 ? null : body, {
-      status: res.status,
-      headers: { 'Content-Type': res.headers.get('Content-Type') ?? 'application/json' },
-    });
-    return keepRotated(out, rotated);
-  } catch (error) {
-    return NextResponse.json(
-      { error: 'eqHubUnreachable', detail: String(error?.message ?? error) },
-      { status: 502 },
-    );
-  }
+  // Refreshes and retries once on a 401; a dead session or an unreachable
+  // eq-hub comes back as `error`.
+  const result = await callWithSession(callHub, { unreachable: 'eqHubUnreachable' });
+  if (result.error) return result.error;
+  return passThrough(result, 'eqHubUnreachable');
 }
 
 export const GET = proxy;
