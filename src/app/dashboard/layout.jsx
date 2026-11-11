@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { readUserCookie } from '@/lib/user';
+
 const { Header, Content } = Layout;
 const { Text } = Typography;
 
@@ -13,17 +15,8 @@ const NAV = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/dashboard/connections', label: 'Connections' },
   { href: '/dashboard/report-templates', label: 'Report templates' },
+  { href: '/dashboard/users', label: 'Users', superadminOnly: true },
 ];
-
-function readUserCookie() {
-  const match = document.cookie.split('; ').find((c) => c.startsWith('eq_user='));
-  if (!match) return null;
-  try {
-    return JSON.parse(decodeURIComponent(match.split('=').slice(1).join('=')));
-  } catch {
-    return null;
-  }
-}
 
 export default function DashboardLayout({ children }) {
   const router = useRouter();
@@ -55,7 +48,7 @@ export default function DashboardLayout({ children }) {
           <Text strong style={{ color: '#fff', fontSize: 16 }}>
             Equilux Admin
           </Text>
-          {NAV.map(({ href, label }) => (
+          {NAV.filter((item) => !item.superadminOnly || user?.isSuperadmin).map(({ href, label }) => (
             <Link
               key={href}
               href={href}
