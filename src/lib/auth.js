@@ -36,9 +36,11 @@ export function setAuthCookies(response, { access, refresh, user }) {
       maxAge: 60 * 60 * 24 * 14,
     });
   }
-  // Readable by the client so the header can greet the operator.
+  // Readable by the client so the header can greet the operator. Plain JSON:
+  // Next.js URL-encodes cookie values itself, so encoding here too stored it
+  // twice-encoded and readUserCookie couldn't parse it.
   if (user !== undefined) {
-    response.cookies.set(USER_COOKIE, encodeURIComponent(JSON.stringify(user ?? {})), {
+    response.cookies.set(USER_COOKIE, JSON.stringify(user ?? {}), {
       ...baseCookie,
       httpOnly: false,
       maxAge: 60 * 60 * 24 * 14,
