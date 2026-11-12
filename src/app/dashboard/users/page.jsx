@@ -1,6 +1,6 @@
 'use client';
 
-import { MobileOutlined } from '@ant-design/icons';
+import { CopyOutlined, MobileOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Input, Modal, QRCode, Space, Table, Tag, Typography } from 'antd';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -37,6 +37,7 @@ function useSecondsLeft(expiresAt) {
 function PhoneLoginModal({ target, onClose }) {
   const [form] = Form.useForm();
   const [qr, setQr] = useState(null); // { link, expiresAt }
+  const [copied, setCopied] = useState(null); // null | 'ok' | 'failed'
   const secondsLeft = useSecondsLeft(qr?.expiresAt);
   const expired = Boolean(qr) && secondsLeft === 0;
   const name = target.full_name || target.email;
@@ -56,7 +57,19 @@ function PhoneLoginModal({ target, onClose }) {
 
   const startOver = () => {
     setQr(null);
+    setCopied(null);
     create.reset();
+  };
+
+  // For a simulator or emulator, which has no camera: the same one-time link
+  // the QR holds, to open with `xcrun simctl openurl` / `adb shell am start`.
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(qr.link);
+      setCopied('ok');
+    } catch {
+      setCopied('failed');
+    }
   };
 
   const minutes = Math.floor(secondsLeft / 60);
@@ -70,10 +83,21 @@ function PhoneLoginModal({ target, onClose }) {
           <Text strong={!expired} type={expired ? 'secondary' : undefined}>
             {expired ? 'Expired. Refresh to make a new code.' : `Expires in ${minutes}:${seconds} · works once`}
           </Text>
+          <Button size="small" icon={<CopyOutlined />} disabled={expired} onClick={copyLink}>
+            {copied === 'ok' ? 'Link copied' : 'Copy link'}
+          </Button>
+          {copied === 'failed' && (
+            <Text type="danger">Couldn&apos;t copy. Your browser blocked the clipboard.</Text>
+          )}
           <Paragraph type="secondary" style={{ textAlign: 'center', marginBottom: 0 }}>
             Scan with the phone&apos;s camera to open the Equilux app as {name}. The session lasts 1 hour and
             can&apos;t change their password or sign-in methods. Closing this doesn&apos;t cancel the code; it
             works until it expires.
+          </Paragraph>
+          <Paragraph type="secondary" style={{ textAlign: 'center', marginBottom: 0, fontSize: 12 }}>
+            On a simulator, copy the link and run{' '}
+            <Text code>xcrun simctl openurl booted &quot;&lt;link&gt;&quot;</Text> (Android emulator:{' '}
+            <Text code>adb shell am start -a android.intent.action.VIEW -d &quot;&lt;link&gt;&quot;</Text>).
           </Paragraph>
         </Space>
       ) : (
